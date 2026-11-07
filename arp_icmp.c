@@ -27,7 +27,7 @@
 
 #define BURST_SIZE 32
 
-#define TIMER_RESOLUTION_CYCLES 20000000000ULL /* around 10s at 2 Ghz */
+#define TIMER_RESOLUTION_CYCLES 60000000000ULL /* around 10s at 2 Ghz */
 #if ENABLE_SEND
 
 #define MAKE_IPV4_ADDR(a,b,c,d) (a + (b<<8) + (c<<16) + (d<<24))
@@ -354,7 +354,7 @@ static  void print_etheraddr(const char *name,const struct rte_ether_addr *eth_a
 
     char buf[RTE_ETHER_ADDR_FMT_SIZE];
     rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, eth_addr);
-    printf("%s%s\n", name, buf);
+    printf("%s%s", name, buf);
 }    
 
 #if ENABLE_TIMER
@@ -391,10 +391,9 @@ static void arp_request_timer_cb(__attribute__((unused)) struct rte_timer *tim,
         }
 
         if (i == 1) {
-            struct rte_ether_hdr *eth =
-            rte_pktmbuf_mtod(arpbuf, struct rte_ether_hdr *);
+            struct rte_ether_hdr *eth = rte_pktmbuf_mtod(arpbuf, struct rte_ether_hdr *);
 
-            print_etheraddr("ARP发送目标MAC:", &eth->d_addr);
+            print_etheraddr("ARP发送目标MAC:\n", &eth->d_addr);
         }
 
         rte_eth_tx_burst(gDpdkPortId, 0, &arpbuf, 1);
@@ -467,11 +466,11 @@ int main(int argc, char* argv[]){
                
                 struct rte_arp_hdr *ahdr = rte_pktmbuf_mtod_offset(mbufs[i], struct rte_arp_hdr *, sizeof(struct rte_ether_hdr));
 
-                addr.s_addr = ahdr->arp_data.arp_tip;
-                printf("arp ---> src:%s ",inet_ntoa(addr));
+                //addr.s_addr = ahdr->arp_data.arp_tip;
+                //printf("arp ---> src:%s ",inet_ntoa(addr));
 
-                addr.s_addr = gLocalIp;
-                printf("local: %s\n",inet_ntoa(addr));
+                //addr.s_addr = gLocalIp;
+                //printf("local: %s\n",inet_ntoa(addr));
 
     
 
@@ -479,7 +478,7 @@ int main(int argc, char* argv[]){
 
                     if(ahdr->arp_opcode == rte_cpu_to_be_16(RTE_ARP_OP_REQUEST)){ 
 
-                        printf("arp --> reply");
+                        //printf("arp --> request");
 
                         struct rte_mbuf *arpbuf = ka_send_arp(mbuf_pool, RTE_ARP_OP_REPLY,ahdr->arp_data.arp_sha.addr_bytes,
                             ahdr->arp_data.arp_tip, ahdr->arp_data.arp_sip);
@@ -489,7 +488,7 @@ int main(int argc, char* argv[]){
                         rte_pktmbuf_free(mbufs[i]); 
                     }else if(ahdr->arp_opcode == rte_cpu_to_be_16(RTE_ARP_OP_REPLY)){
 
-                        printf("arp --> request\n");
+                        //printf("arp --> reply\n");
 
                         uint8_t *hwaddr = ka_get_dst_macaddr(ahdr->arp_data.arp_sip);
                         struct arp_table *table = arp_table_instance();
@@ -516,7 +515,7 @@ int main(int argc, char* argv[]){
 
                         struct arp_entry *iter;
                          for(iter = table->entries; iter != NULL; iter =iter->next){
-                            print_etheraddr("arp entry --> mac: ", (struct rte_ether_addr *)iter->hwaddr);
+                            print_etheraddr("arp entry --> mac:  ", (struct rte_ether_addr *)iter->hwaddr);
                             
                             addr.s_addr = iter->ip;
                             printf("arp ---> src: %s\n",inet_ntoa(addr));
@@ -557,11 +556,11 @@ int main(int argc, char* argv[]){
                 *((char *)udphdr + udp_len) = '\0';
 
 
-                addr.s_addr = iphdr->src_addr;
-                printf("src:%s:%d, ",inet_ntoa(addr),ntohs(udphdr->src_port));
+                //addr.s_addr = iphdr->src_addr;
+                //printf("src:%s:%d, ",inet_ntoa(addr),ntohs(udphdr->src_port));
 
-                addr.s_addr = iphdr->dst_addr;
-                printf("dst:%s:%d,  %s\n ",inet_ntoa(addr),ntohs(udphdr->dst_port),(char *)(udphdr+1));
+                //addr.s_addr = iphdr->dst_addr;
+                //printf("dst:%s:%d,  %s\n ",inet_ntoa(addr),ntohs(udphdr->dst_port),(char *)(udphdr+1));
 
 #if ENABLE_SEND
                 uint16_t data_len = udp_len - sizeof(struct rte_udp_hdr);
@@ -578,11 +577,11 @@ int main(int argc, char* argv[]){
             if(iphdr->next_proto_id == IPPROTO_ICMP){
                 struct rte_icmp_hdr *icmphdr = (struct rte_icmp_hdr *)(iphdr + 1);
 
-                addr.s_addr = iphdr->src_addr;
-                printf("icmp ---> src:%s ",inet_ntoa(addr));
+                //addr.s_addr = iphdr->src_addr;
+                //printf("icmp ---> src:%s ",inet_ntoa(addr));
 
-                addr.s_addr = iphdr->dst_addr;
-                printf("local: %s ,type:%d\n",inet_ntoa(addr),icmphdr->icmp_type);
+                //addr.s_addr = iphdr->dst_addr;
+                //printf("local: %s ,type:%d\n",inet_ntoa(addr),icmphdr->icmp_type);
                 
                 if(icmphdr->icmp_type == RTE_IP_ICMP_ECHO_REQUEST){
                     
