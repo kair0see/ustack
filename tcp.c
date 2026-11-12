@@ -632,7 +632,7 @@ static int pkt_process(__attribute__((unused)) void *arg){
 #if ENABLE_TCP_APP
             
             if(iphdr->next_proto_id == IPPROTO_TCP){
-                printf("into tcp ?\n");
+                //printf("into tcp ?\n");
                 ka_tcp_process(mbufs[i]);
             
             }
@@ -1080,8 +1080,8 @@ static int udp_server_entry(void* argc){
                 continue;
             }else{
 
-                //printf("two ring recv from %s:%d,data:%s\n", inet_ntoa(clientaddr.sin_addr), 
-                //    ntohs(clientaddr.sin_port),buffer);
+                printf("two ring recv from %s:%d,data:%s\n", inet_ntoa(clientaddr.sin_addr), 
+                    ntohs(clientaddr.sin_port),buffer);
                 nsend_to(connfd, buffer, strlen(buffer), 0,&clientaddr, sizeof(clientaddr));
             }
     }
@@ -1233,17 +1233,18 @@ static int ka_tcp_handle_listen(struct ka_tcp_stream *stream, struct rte_tcp_hdr
             fragment->sport = tcphdr->dst_port;
             fragment->dport = tcphdr->src_port;
 
+            stream->rcv_nxt = ntohl(tcphdr->sent_seq) + 1;
             
-            fragment->seqnum = stream->snd_nxt;
-            fragment->acknum = ntohl(tcphdr->sent_seq)+1;
+            fragment->seqnum = htonl(stream->snd_nxt);
+            fragment->acknum = htonl(stream->rcv_nxt);
 
-            fragment->tcp_flags = (RTE_TCP_SYN_FLAG | RTE_TCP_ACK_FLAG);
+            fragment->tcp_flags = RTE_TCP_SYN_FLAG | RTE_TCP_ACK_FLAG;
             fragment->rx_win = htons(TCP_INITIAL_WINDOW);
             fragment->head_len = 0x50;
             fragment->data = NULL;
             fragment->length = 0;
             
-
+            stream->snd_nxt++;
             stream->status = KA_TCP_STATUS_SYN_RCVD;
             printf("syn --> tcp server\n");
             rte_ring_mp_enqueue(stream->sndbuf, fragment);
@@ -1259,18 +1260,117 @@ static int ka_tcp_handle_syn_rcvd(struct ka_tcp_stream *stream, struct rte_tcp_h
         if(stream->status == KA_TCP_STATUS_SYN_RCVD){
 
            uint32_t acknum = ntohl(tcphdr->recv_ack);
-           if(acknum == stream->snd_nxt + 1){
+           if(acknum == stream->snd_nxt ){
                 stream->status = KA_TCP_STATUS_ESTABLISHED;
-
-                
            }
-           
-
         }
-
     }
     return 0;
 
+}
+
+static int ka_tcp_handle_established(struct ka_tcp_stream *stream, struct rte_tcp_hdr *tcphdr ,int tcplen){
+    if(tcphdr->tcp_flags & RTE_TCP_SYN_FLAG){
+
+    }
+
+    if(tcphdr->tcp_flags & RTE_TCP_PSH_FLAG){
+        // rcv pkt
+        struct ka_tcp_fragment *rfragment = rte_malloc("ka_tcp_fragment", sizeof(struct ka_tcp_fragment), 0);
+        if(rfragment == NULL)return -1;
+        memset(rfragment, 0, sizeof(struct ka_tcp_fragment));
+
+        rfragment->dport = tcphdr->dst_port;
+        rfragment->sport = tcphdr->src_port;
+
+        uint8_t hdrlen = tcphdr->data_off >> 4;
+        int payloadlen = tcplen - hdrlen*4;
+        if(payloadlen > 0){
+    
+            uint8_t *payload = (uint8_t*)tcphdr + hdrlen * 4;
+
+            rfragment->data = rte_malloc("unsigned char *", payloadlen + 1, 0);
+            if(rfragment->data == NULL){
+                rte_free(rfragment);
+                return -1;
+            }
+            memset(rfragment->data, 0, payloadlen);
+
+            rte_memcpy(rfragment->data, payload, payloadlen + 1);
+            rfragment->length = payloadlen;
+
+            printf("tcp : %s\n", payload);
+        }
+        rte_ring_mp_enqueue(stream->rcvbuf, rfragment);
+
+
+        //ack pkt
+        struct ka_tcp_fragment *ackfrag = rte_malloc("ka_tcp_fragment", sizeof(struct ka_tcp_fragment), 0);
+        if(ackfrag == NULL) return -1;
+        memset(ackfrag, 0, sizeof(struct ka_tcp_fragment));
+
+        ackfrag->dport = tcphdr->src_port;
+        ackfrag->sport = tcphdr->dst_port;
+
+        //remote
+        if(stream->snd_nxt != ntohs(tcphdr->sent_seq)){
+
+        };
+        printf("ka_tcp_handle_established: %d, %d\n",stream->rcv_nxt,ntohs(tcphdr->sent_seq));
+        
+        stream->rcv_nxt = stream->rcv_nxt + payloadlen;
+        stream->snd_nxt = ntohl(tcphdr->recv_ack);
+        stream->snd_una = ntohl(tcphdr->recv_ack); 
+
+        ackfrag->seqnum = htonl(stream->snd_nxt);
+        ackfrag->acknum = htonl(stream->rcv_nxt);
+
+        ackfrag->tcp_flags = RTE_TCP_ACK_FLAG;
+        ackfrag->rx_win = htons(TCP_INITIAL_WINDOW);
+        ackfrag->head_len = 0x50;
+        ackfrag->data = NULL;
+        ackfrag->length = 0;
+        rte_ring_mp_enqueue(stream->sndbuf, ackfrag);
+
+        
+        //echo pkt
+        struct ka_tcp_fragment *echofrag = rte_malloc("ka_tcp_fragment", sizeof(struct ka_tcp_fragment), 0);
+        if(echofrag == NULL) return -1;
+        memset(echofrag, 0, sizeof(struct ka_tcp_fragment));
+
+        echofrag->dport = tcphdr->src_port;
+        echofrag->sport = tcphdr->dst_port;
+        echofrag->seqnum = htonl(stream->snd_nxt);
+        echofrag->acknum = htonl(stream->rcv_nxt);
+
+        echofrag->tcp_flags = RTE_TCP_ACK_FLAG | RTE_TCP_PSH_FLAG;
+        echofrag->rx_win = htons(TCP_INITIAL_WINDOW);
+        echofrag->head_len = 0x50;
+
+        uint8_t *payload = (uint8_t*)tcphdr + hdrlen * 4;
+
+        echofrag->data = rte_malloc("unsigned char *", payloadlen, 0);
+        if(echofrag->data == NULL){
+            rte_free(echofrag);
+            return -1;
+        }
+        memset(echofrag->data, 0, payloadlen);
+
+        rte_memcpy(echofrag->data, payload, payloadlen);
+        echofrag->length = payloadlen;
+
+        rte_ring_mp_enqueue(stream->sndbuf, echofrag);
+
+        
+    }
+    
+    if(tcphdr->tcp_flags & RTE_TCP_ACK_FLAG){
+
+    }
+    if(tcphdr->tcp_flags & RTE_TCP_FIN_FLAG){
+        stream->status = KA_TCP_STATUS_CLOSE_WAIT;
+    }
+    return 0;
 }
 
 
@@ -1279,11 +1379,13 @@ static int ka_tcp_process(struct rte_mbuf *tcpmbuf){
     struct rte_ipv4_hdr *iphdr = rte_pktmbuf_mtod_offset(tcpmbuf, struct rte_ipv4_hdr *, sizeof(struct rte_ether_hdr));
     struct rte_tcp_hdr *tcphdr =  (struct rte_tcp_hdr*) (iphdr + 1);
     
-    
+    uint16_t tcpcksum = tcphdr->cksum;
+    tcphdr->cksum = 0;
     uint16_t cksum = rte_ipv4_udptcp_cksum(iphdr, tcphdr);
-    if(cksum != UINT16_MAX){
+    if(cksum != tcpcksum){
         return -1;
     }
+    tcphdr->cksum = tcpcksum;
 
     struct ka_tcp_stream *stream = ka_tcp_stream_serch(iphdr->src_addr,iphdr->dst_addr,tcphdr->src_port,tcphdr->dst_port);
     if(stream == NULL){
@@ -1297,20 +1399,25 @@ static int ka_tcp_process(struct rte_mbuf *tcpmbuf){
         case KA_TCP_STATUS_CLOSED://client/server
             break;
 
-        case KA_TCP_STATUS_LISTEN://server
+        case KA_TCP_STATUS_LISTEN:{//server
             ka_tcp_handle_listen(stream, tcphdr);
             break;
-            
-        case KA_TCP_STATUS_SYN_RCVD://server
+        }
+        case KA_TCP_STATUS_SYN_RCVD:{ //server
             ka_tcp_handle_syn_rcvd(stream, tcphdr);
             break;
-
+        }
         case KA_TCP_STATUS_SYN_SENT://client
             break;    
 
-        case KA_TCP_STATUS_ESTABLISHED://client/server
-            break;
+        case KA_TCP_STATUS_ESTABLISHED:{//client/server
 
+            int tcplen = ntohs(iphdr->total_length) - sizeof(struct rte_ipv4_hdr);
+
+            ka_tcp_handle_established(stream, tcphdr, tcplen);
+
+            break;
+        }
         case KA_TCP_STATUS_FIN_WAIT_1://~client
             break;
 
@@ -1365,8 +1472,8 @@ static void ka_encode_tcp_pkt(uint8_t *msg,  uint32_t sip,uint32_t dip, const ui
     struct rte_tcp_hdr *tcp = (struct rte_tcp_hdr *)(msg + sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr));
     tcp->src_port = fragment->sport;
     tcp->dst_port = fragment->dport;
-    tcp->sent_seq = htonl(fragment->seqnum);
-    tcp->recv_ack = htonl(fragment->acknum);
+    tcp->sent_seq = fragment->seqnum;
+    tcp->recv_ack = fragment->acknum;
 
     tcp->data_off = fragment->head_len;
     tcp->rx_win =fragment->rx_win;
@@ -1433,6 +1540,7 @@ static int ka_tcp_out(struct rte_mempool *mbuf_pool){
 
             rte_ring_mp_enqueue_burst(ring->out, (void **)&arpbuf, 1, NULL);
             
+            
             rte_ring_mp_enqueue(stream->sndbuf, fragment);
         }else{
             struct rte_mbuf *tcpbuf = ka_tcp_pkt(mbuf_pool, stream->dip, stream->sip, stream->localmac, dstmac, fragment);
@@ -1441,6 +1549,9 @@ static int ka_tcp_out(struct rte_mempool *mbuf_pool){
 
             rte_ring_mp_enqueue_burst(ring->out, (void**)&tcpbuf, 1, NULL);
             printf("syn --> client\n");
+            if(fragment->data != NULL){
+                rte_free(fragment->data);
+            }
             rte_free(fragment);
 
         }
@@ -1548,7 +1659,7 @@ int main(int argc, char* argv[]){
         unsigned nb_tx = rte_ring_sc_dequeue_burst(ring->out, (void **)tx, BURST_SIZE, NULL);
         if(nb_tx >0){
             //printf("main: tx, burst\n");
-            rte_eth_tx_burst(gDpdkPortId, 0, tx, nb_tx);
+            int sent = rte_eth_tx_burst(gDpdkPortId, 0, tx, nb_tx);
           
             unsigned i = 0;
             for(i = 0; i<nb_tx ; i++){
